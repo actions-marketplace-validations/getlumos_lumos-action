@@ -1,0 +1,400 @@
+name: Separate Rust and TypeScript Outputs
+
+# Examples showing how to organize generated Rust and TypeScript files
+# into separate directories after generation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  # Example 1: Simple Move to Separate Directories
+  simple-separation:
+    name: Simple Language Separation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate from schemas
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+          fail-on-drift: false
+
+      - name: Separate by language
+        run: |
+          mkdir -p generated/rust generated/typescript
+
+          # Move all Rust files
+          find schemas -name "generated.rs" -exec mv {} generated/rust/ \;
+
+          # Move all TypeScript files
+          find schemas -name "generated.ts" -exec mv {} generated/typescript/ \;
+
+      - name: Verify separation
+        run: |
+          echo "=== Rust Files ==="
+          ls -lh generated/rust/
+
+          echo ""
+          echo "=== TypeScript Files ==="
+          ls -lh generated/typescript/
+
+  # Example 2: Rename with Schema Names
+  rename-with-schema-names:
+    name: Rename Files with Schema Names
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Rename and separate by language
+        run: |
+          mkdir -p generated/rust generated/typescript
+
+          # Find all schema files and rename generated code
+          find schemas -name "*.lumos" | while read schema; do
+            schema_name=$(basename "$schema" .lumos)
+            schema_dir=$(dirname "$schema")
+
+            echo "Processing schema: $schema_name"
+
+            # Move and rename Rust file
+            if [ -f "$schema_dir/generated.rs" ]; then
+              mv "$schema_dir/generated.rs" \
+                 "generated/rust/${schema_name}.rs"
+              echo "  ✅ Rust: ${schema_name}.rs"
+            fi
+
+            # Move and rename TypeScript file
+            if [ -f "$schema_dir/generated.ts" ]; then
+              mv "$schema_dir/generated.ts" \
+                 "generated/typescript/${schema_name}.ts"
+              echo "  ✅ TypeScript: ${schema_name}.ts"
+            fi
+          done
+
+      - name: Show renamed files
+        run: |
+          echo "=== Generated Rust Files ==="
+          find generated/rust -name "*.rs" | sort
+
+          echo ""
+          echo "=== Generated TypeScript Files ==="
+          find generated/typescript -name "*.ts" | sort
+
+  # Example 3: Copy Instead of Move
+  copy-to-separate-dirs:
+    name: Copy to Separate Directories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Copy to language-specific directories
+        run: |
+          mkdir -p src/rust src/typescript
+
+          # Copy Rust files (keep originals in place)
+          find schemas -name "generated.rs" | while read file; do
+            cp "$file" src/rust/
+          done
+
+          # Copy TypeScript files (keep originals in place)
+          find schemas -name "generated.ts" | while read file; do
+            cp "$file" src/typescript/
+          done
+
+      - name: Verify both locations exist
+        run: |
+          echo "=== Original Locations ==="
+          find schemas -name "generated.*"
+
+          echo ""
+          echo "=== Copied to src/rust ==="
+          ls -lh src/rust/
+
+          echo ""
+          echo "=== Copied to src/typescript ==="
+          ls -lh src/typescript/
+
+  # Example 4: Symbolic Links
+  symlink-separation:
+    name: Create Symlinks to Generated Code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Create symlinks by language
+        run: |
+          mkdir -p links/rust links/typescript
+
+          # Create symlinks to Rust files
+          find schemas -name "generated.rs" | while read file; do
+            schema_name=$(basename $(dirname "$file"))
+            ln -sf "$(realpath $file)" "links/rust/${schema_name}.rs"
+          done
+
+          # Create symlinks to TypeScript files
+          find schemas -name "generated.ts" | while read file; do
+            schema_name=$(basename $(dirname "$file"))
+            ln -sf "$(realpath $file)" "links/typescript/${schema_name}.ts"
+          done
+
+      - name: Verify symlinks
+        run: |
+          echo "=== Rust Symlinks ==="
+          ls -lh links/rust/
+
+          echo ""
+          echo "=== TypeScript Symlinks ==="
+          ls -lh links/typescript/
+
+  # Example 5: Hierarchical Organization
+  hierarchical-organization:
+    name: Hierarchical Language Organization
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Organize hierarchically
+        run: |
+          # Organize by: generated/{language}/{module}/{file}
+
+          find schemas -name "*.lumos" | while read schema; do
+            # Extract module from path (e.g., schemas/game/player.lumos -> game)
+            module=$(dirname "$schema" | sed 's|schemas/||' | sed 's|schemas||')
+            schema_name=$(basename "$schema" .lumos)
+            schema_dir=$(dirname "$schema")
+
+            # Create module directories
+            if [ -n "$module" ]; then
+              mkdir -p "generated/rust/$module"
+              mkdir -p "generated/typescript/$module"
+            else
+              mkdir -p "generated/rust/core"
+              mkdir -p "generated/typescript/core"
+              module="core"
+            fi
+
+            # Move Rust files
+            if [ -f "$schema_dir/generated.rs" ]; then
+              mv "$schema_dir/generated.rs" \
+                 "generated/rust/$module/${schema_name}.rs"
+            fi
+
+            # Move TypeScript files
+            if [ -f "$schema_dir/generated.ts" ]; then
+              mv "$schema_dir/generated.ts" \
+                 "generated/typescript/$module/${schema_name}.ts"
+            fi
+          done
+
+      - name: Show hierarchical structure
+        run: |
+          echo "=== Hierarchical Structure ==="
+          tree generated/ || find generated/ -type f | sort
+
+  # Example 6: Language-Specific Processing
+  language-specific-processing:
+    name: Process Each Language Differently
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Separate and process Rust files
+        run: |
+          mkdir -p build/rust
+
+          find schemas -name "generated.rs" | while read file; do
+            filename=$(basename $(dirname "$file")).rs
+            mv "$file" "build/rust/$filename"
+          done
+
+          # Format Rust code
+          if command -v rustfmt &> /dev/null; then
+            find build/rust -name "*.rs" -exec rustfmt {} \;
+            echo "✅ Formatted Rust files"
+          fi
+
+      - name: Separate and process TypeScript files
+        run: |
+          mkdir -p build/typescript
+
+          find schemas -name "generated.ts" | while read file; do
+            filename=$(basename $(dirname "$file")).ts
+            mv "$file" "build/typescript/$filename"
+          done
+
+          # Format TypeScript code (if prettier is available)
+          if command -v prettier &> /dev/null; then
+            prettier --write "build/typescript/**/*.ts"
+            echo "✅ Formatted TypeScript files"
+          fi
+
+      - name: Upload Rust artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-generated-code
+          path: build/rust/
+
+      - name: Upload TypeScript artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: typescript-generated-code
+          path: build/typescript/
+
+  # Example 7: Conditional Generation (Rust Only Workflow)
+  rust-only-workflow:
+    name: Rust-Only Workflow (Ignore TypeScript)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Extract and use only Rust files
+        run: |
+          mkdir -p src/generated
+
+          # Move only Rust files to src
+          find schemas -name "generated.rs" -exec mv {} src/generated/ \;
+
+          # Remove TypeScript files (not needed for Rust-only project)
+          find schemas -name "generated.ts" -delete
+
+          echo "=== Rust Files ==="
+          ls -lh src/generated/
+
+      - name: Build Rust project
+        run: |
+          # Example: Build Solana program
+          # cargo build-bpf
+
+          echo "Ready to build Rust project with generated code"
+
+  # Example 8: TypeScript Only Workflow
+  typescript-only-workflow:
+    name: TypeScript-Only Workflow (Ignore Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Extract and use only TypeScript files
+        run: |
+          mkdir -p src/generated
+
+          # Move only TypeScript files to src
+          find schemas -name "generated.ts" -exec mv {} src/generated/ \;
+
+          # Remove Rust files (not needed for TypeScript-only project)
+          find schemas -name "generated.rs" -delete
+
+          echo "=== TypeScript Files ==="
+          ls -lh src/generated/
+
+      - name: Build TypeScript project
+        run: |
+          # Example: Build with tsc
+          # npm run build
+
+          echo "Ready to build TypeScript project with generated code"
+
+  # Example 9: With Git Ignore Patterns
+  with-gitignore:
+    name: Organize with Proper .gitignore
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Organize and create .gitignore
+        run: |
+          mkdir -p generated/rust generated/typescript
+
+          # Move files
+          find schemas -name "generated.rs" -exec mv {} generated/rust/ \;
+          find schemas -name "generated.ts" -exec mv {} generated/typescript/ \;
+
+          # Create/update .gitignore
+          cat >> .gitignore <<EOF
+
+          # Generated code (organized)
+          generated/rust/
+          generated/typescript/
+
+          # Keep schemas in git
+          !schemas/
+          !**/*.lumos
+          EOF
+
+          echo "✅ Created .gitignore for generated code"
+
+      - name: Commit .gitignore
+        run: |
+          git add .gitignore
+          git commit -m "chore: Add .gitignore for generated code" || exit 0
+
+  # Expected directory structures for each strategy:
+  #
+  # Strategy 1 (Simple):
+  # generated/
+  # ├── rust/
+  # │   └── generated.rs
+  # └── typescript/
+  #     └── generated.ts
+  #
+  # Strategy 2 (Renamed):
+  # generated/
+  # ├── rust/
+  # │   ├── player.rs
+  # │   ├── inventory.rs
+  # │   └── game_state.rs
+  # └── typescript/
+  #     ├── player.ts
+  #     ├── inventory.ts
+  #     └── game_state.ts
+  #
+  # Strategy 3 (Hierarchical):
+  # generated/
+  # ├── rust/
+  # │   ├── game/
+  # │   │   ├── player.rs
+  # │   │   └── inventory.rs
+  # │   └── core/
+  # │       └── state.rs
+  # └── typescript/
+  #     ├── game/
+  #     │   ├── player.ts
+  #     │   └── inventory.ts
+  #     └── core/
+  #         └── state.ts

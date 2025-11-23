@@ -171,6 +171,129 @@ jobs:
     git push
 ```
 
+## Advanced Usage
+
+### Multi-Language Generation
+
+LUMOS **always generates both Rust and TypeScript** from a single schema. You cannot generate only one language - this ensures type-safe serialization compatibility between Solana programs and clients.
+
+**What gets generated:**
+```yaml
+- uses: getlumos/lumos-action@v1
+  with:
+    schema: 'schemas/player.lumos'
+
+# Result:
+# schemas/generated.rs   ← Rust (Anchor/Borsh)
+# schemas/generated.ts   ← TypeScript + Borsh schemas
+```
+
+**To separate languages into different directories:**
+
+```yaml
+- uses: getlumos/lumos-action@v1
+  with:
+    schema: 'schemas/**/*.lumos'
+
+- name: Organize by language
+  run: |
+    mkdir -p generated/rust generated/typescript
+    find schemas -name "generated.rs" -exec mv {} generated/rust/ \;
+    find schemas -name "generated.ts" -exec mv {} generated/typescript/ \;
+```
+
+See [docs/multi-language.md](docs/multi-language.md) for:
+- ✅ Why both languages are generated
+- ✅ Workarounds for language separation
+- ✅ Monorepo organization patterns
+- ✅ File renaming strategies
+
+### Custom Output Paths
+
+Generated files appear **in the same directory** as the schema file. Custom output paths are not directly supported.
+
+**Default behavior:**
+```
+schemas/
+├── player.lumos
+├── generated.rs    ← Generated here
+└── generated.ts    ← Generated here
+```
+
+**Workaround - Post-generation move:**
+
+```yaml
+- uses: getlumos/lumos-action@v1
+  with:
+    schema: 'schemas/**/*.lumos'
+
+- name: Move to custom location
+  run: |
+    mkdir -p custom/output/path
+    find schemas -name "generated.*" -exec mv {} custom/output/path/ \;
+```
+
+See [docs/custom-output-paths.md](docs/custom-output-paths.md) for:
+- ✅ Working directory vs output path
+- ✅ 10+ organization patterns
+- ✅ Monorepo centralized vs distributed
+- ✅ Dynamic configuration examples
+
+### Monorepo Support
+
+For projects with multiple packages, use matrix strategy:
+
+```yaml
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: [auth, payments, users, analytics]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'packages/${{ matrix.package }}/schemas/*.lumos'
+          working-directory: 'packages/${{ matrix.package }}'
+```
+
+**Benefits:**
+- Each package validated independently
+- Parallel execution (faster)
+- Failures isolated per package
+
+See [examples/workflows/monorepo-multi-package.yml](examples/workflows/monorepo-multi-package.yml) for:
+- ✅ 7 complete monorepo strategies
+- ✅ Matrix vs sequential generation
+- ✅ Centralized vs distributed outputs
+- ✅ Smart generation (changed packages only)
+
+### Example Workflows
+
+**Separate Rust and TypeScript:**
+- [examples/workflows/separate-rust-typescript.yml](examples/workflows/separate-rust-typescript.yml)
+  - 9 language separation patterns
+  - Rename with schema names
+  - Symbolic links
+  - Language-specific processing
+
+**Custom Output Organization:**
+- [examples/workflows/custom-output-organization.yml](examples/workflows/custom-output-organization.yml)
+  - 10 organization patterns
+  - Module-based organization
+  - Versioned outputs
+  - Workspace integration (Cargo/npm)
+  - CI/CD optimized structure
+
+**Monorepo Multi-Package:**
+- [examples/workflows/monorepo-multi-package.yml](examples/workflows/monorepo-multi-package.yml)
+  - Matrix generation strategy
+  - Centralized code collection
+  - Auto-commit on main branch
+  - Per-package custom naming
+
 ## Customizing PR Comments
 
 The action provides default PR comments, but you can create custom formats using the outputs.
