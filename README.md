@@ -337,6 +337,111 @@ See [docs/monorepo-advanced.md](docs/monorepo-advanced.md) for:
 - [Breaking Change Detection](examples/workflows/breaking-change-detection.yml) - Git diff analysis
 - [Setup Guide](examples/monorepo-setup-guide.md) - Step-by-step monorepo setup
 
+### Preventing PR Merges
+
+Enforce different validation rules for PRs vs main branch, with GitHub branch protection integration.
+
+**Branch-Conditional Validation:**
+
+```yaml
+- uses: getlumos/lumos-action@v1
+  with:
+    schema: 'schemas/**/*.lumos'
+    # Strict on PRs, lenient on main
+    fail-on-drift: ${{ github.event_name == 'pull_request' }}
+```
+
+**Behavior:**
+- **Pull Requests:** Fails if drift detected → blocks merge via required status check
+- **Main Branch:** Warns but doesn't fail → allows push and auto-commit
+
+**GitHub Branch Protection Integration:**
+
+1. **Configure Repository Settings:**
+   - Settings → Branches → Add rule for `main`
+   - ✅ Require status checks to pass before merging
+   - Select status check: `validate` (your workflow job name)
+   - ✅ Require branches to be up to date before merging
+
+2. **Workflow Setup:**
+   ```yaml
+   name: validate  # This becomes the required status check
+
+   on:
+     pull_request:
+       branches: [main]
+
+   jobs:
+     schema-validation:
+       runs-on: ubuntu-latest
+       steps:
+         - uses: actions/checkout@v4
+         - uses: getlumos/lumos-action@v1
+           with:
+             schema: 'schemas/**/*.lumos'
+             fail-on-drift: true  # Blocks merge if drift detected
+   ```
+
+**Result:** GitHub prevents merging until validation passes.
+
+**Manual Approval for Schema Drift:**
+
+Allow maintainers to approve PRs with drift after review:
+
+```yaml
+- name: Check for manual approval
+  if: steps.lumos.outputs.drift-detected == 'true'
+  uses: actions/github-script@v7
+  with:
+    script: |
+      const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+        issue_number: context.issue.number,
+      });
+
+      const hasApproval = labels.some(l => l.name === 'schema-drift-approved');
+
+      if (!hasApproval) {
+        core.setFailed('Add label "schema-drift-approved" to proceed');
+      }
+```
+
+**Emergency Hotfix Bypass:**
+
+Allow critical fixes to bypass validation:
+
+```yaml
+- name: Check for hotfix label
+  id: hotfix
+  uses: actions/github-script@v7
+  with:
+    result-encoding: string
+    script: |
+      const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+        issue_number: context.issue.number,
+      });
+      return labels.some(l => l.name === 'hotfix') ? 'true' : 'false';
+
+- uses: getlumos/lumos-action@v1
+  with:
+    fail-on-drift: ${{ steps.hotfix.outputs.result != 'true' }}
+```
+
+See [docs/branch-protection.md](docs/branch-protection.md) for:
+- ✅ Complete branch protection setup guide
+- ✅ 4 enforcement strategies (conditional, GitHub integration, manual approval, emergency override)
+- ✅ Team-based approval workflows
+- ✅ Hotfix patterns and best practices
+- ✅ Troubleshooting guide
+
+**Complete Examples:**
+- [Branch Protection Setup](examples/workflows/branch-protection.yml) - Production-ready complete setup
+- [Manual Approval Workflow](examples/workflows/manual-approval.yml) - Label, user, and team-based approval
+- [Emergency Override](examples/workflows/emergency-override.yml) - Hotfix bypass patterns
+
 ### Example Workflows
 
 **Separate Rust and TypeScript:**

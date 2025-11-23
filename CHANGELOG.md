@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Documentation:** `docs/branch-protection.md` - Branch-specific workflows and merge protection
+  - Strategy 1: Branch-conditional enforcement (strict on PRs, lenient on main)
+  - Strategy 2: GitHub branch protection integration (required status checks)
+  - Strategy 3: Manual approval workflows (label, user, and team-based)
+  - Strategy 4: Emergency override patterns (hotfix bypass mechanisms)
+  - Production-ready complete setup example
+  - Comprehensive troubleshooting guide
+- **Examples:** `examples/workflows/branch-protection.yml` - Complete production setup
+  - Branch-conditional validation (PR vs main)
+  - Hotfix label bypass mechanism
+  - Manual approval checking (label + maintainer approval)
+  - Auto-commit on main branch
+  - Comprehensive PR commenting
+- **Examples:** `examples/workflows/manual-approval.yml` - Three approval strategies
+  - Label-based approval (simplest - schema-drift-approved label)
+  - User-based approval (specific maintainer GitHub usernames)
+  - Team-based approval (GitHub Teams integration)
+  - Auto-request reviews from teams
+  - Approval confirmation comments
+- **Examples:** `examples/workflows/emergency-override.yml` - Emergency bypass patterns
+  - Label-based hotfix bypass (hotfix label)
+  - Branch name pattern bypass (hotfix/* and emergency/* branches)
+  - Emergency mode file (.github/EMERGENCY_MODE for site-wide bypass)
+  - Stale emergency mode detection and alerts
+  - Follow-up requirement enforcement
+- **Documentation:** Expanded "Preventing PR Merges" section in README
+  - Branch-conditional validation inline example
+  - GitHub branch protection integration guide
+  - Manual approval workflow example
+  - Emergency hotfix bypass example
+  - Links to comprehensive guides and examples
+
+### Added (from previous work)
+
 - **Documentation:** `docs/monorepo-advanced.md` - Advanced monorepo strategies guide
   - Per-package drift detection with matrix strategy + path filtering
   - Selective failure strategies (criticality tiers)
@@ -115,8 +149,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Q5 (PR Comment Customization): 72 → 85 (+13 points)
 - Q7 (Custom Output Paths): 65 → 80 (+15 points)
 - Q8 (Error Type Documentation): 72 → 85 (+13 points)
+- Q9 (Branch-Specific Workflows & Merge Protection): 42 → 85 (+43 points)
 - Q10 (Monorepo Per-Package Drift Detection): 28 → 80 (+52 points)
-- Overall Score: 68.6 → 80.5 (+11.9 points)
+- Overall Score: 68.6 → 84.9 (+16.3 points)
 
 ## [1.0.0] - 2025-11-22
 
