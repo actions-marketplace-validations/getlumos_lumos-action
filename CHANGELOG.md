@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CI/CD:** GitHub Actions workflow for automated testing
+  - Test action with test schema (validate generation works)
+  - Verify generated files are created correctly
+  - Validate action.yml YAML syntax
+  - Test validation-only mode (check-only flag)
+  - Shellcheck for bash scripts in action.yml
+  - Test schema at `test/schema.lumos` for CI validation
 - **Documentation:** `docs/branch-protection.md` - Branch-specific workflows and merge protection
   - Strategy 1: Branch-conditional enforcement (strict on PRs, lenient on main)
   - Strategy 2: GitHub branch protection integration (required status checks)

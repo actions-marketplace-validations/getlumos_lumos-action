@@ -1,0 +1,14 @@
+# Generated test files
+test/generated.rs
+test/generated.ts
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
