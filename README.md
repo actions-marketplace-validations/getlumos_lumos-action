@@ -1,8 +1,15 @@
 # LUMOS Generate Action
 
 [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-LUMOS%20Generate-blue.svg?colorA=24292e&colorB=0366d6&style=flat&longCache=true&logo=github)](https://github.com/marketplace/actions/lumos-generate)
+[![License](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 
 GitHub Action for automatic LUMOS schema generation and validation in CI/CD pipelines.
+
+**Why use this action?**
+- Prevent type drift between Rust and TypeScript in your Solana projects
+- Automate schema validation on every PR
+- Catch schema changes before they break production
+- Zero-config installation - works out of the box
 
 ## Quick Start
 
