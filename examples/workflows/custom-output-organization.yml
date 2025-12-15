@@ -1,0 +1,436 @@
+name: Custom Output Organization Patterns
+
+# Various patterns for organizing generated code in custom locations
+# Choose the pattern that best fits your project structure
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  # Pattern 1: Standard Project Layout (src/generated/)
+  standard-layout:
+    name: Standard Project Layout
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Organize into src/generated
+        run: |
+          mkdir -p src/generated
+
+          # Move all generated files to src/generated
+          find schemas -name "generated.rs" -o -name "generated.ts" | \
+            xargs -I {} mv {} src/generated/
+
+      - name: Show structure
+        run: |
+          echo "=== Project Structure ==="
+          tree src/ || ls -R src/
+
+  # Pattern 2: Separate Source Directories
+  separate-src-dirs:
+    name: Separate Source Directories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Organize by language source directories
+        run: |
+          # Rust program source
+          mkdir -p programs/src/generated
+
+          # TypeScript client source
+          mkdir -p client/src/generated
+
+          # Move Rust to program source
+          find schemas -name "generated.rs" -exec mv {} programs/src/generated/ \;
+
+          # Move TypeScript to client source
+          find schemas -name "generated.ts" -exec mv {} client/src/generated/ \;
+
+      - name: Verify organization
+        run: |
+          echo "=== Programs (Rust) ==="
+          ls -lh programs/src/generated/
+
+          echo ""
+          echo "=== Client (TypeScript) ==="
+          ls -lh client/src/generated/
+
+  # Pattern 3: Build Artifacts Directory
+  build-artifacts:
+    name: Build Artifacts Directory
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Copy to build directory
+        run: |
+          mkdir -p build/generated/{rust,typescript}
+
+          # Copy to build artifacts
+          find schemas -name "generated.rs" | while read file; do
+            cp "$file" build/generated/rust/
+          done
+
+          find schemas -name "generated.ts" | while read file; do
+            cp "$file" build/generated/typescript/
+          done
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-code-artifacts
+          path: build/generated/
+
+  # Pattern 4: Module-Based Organization
+  module-based:
+    name: Module-Based Organization
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Organize by modules
+        run: |
+          # Extract module from schema path and organize accordingly
+          find schemas -name "*.lumos" | while read schema; do
+            # Get module name from directory structure
+            module=$(dirname "$schema" | sed 's|schemas/||')
+            schema_name=$(basename "$schema" .lumos)
+            schema_dir=$(dirname "$schema")
+
+            # Create module directories
+            mkdir -p "src/modules/$module"
+
+            # Move files to module directory
+            if [ -f "$schema_dir/generated.rs" ]; then
+              mv "$schema_dir/generated.rs" \
+                 "src/modules/$module/${schema_name}.rs"
+            fi
+
+            if [ -f "$schema_dir/generated.ts" ]; then
+              mv "$schema_dir/generated.ts" \
+                 "src/modules/$module/${schema_name}.ts"
+            fi
+          done
+
+      - name: Show module structure
+        run: |
+          echo "=== Module Structure ==="
+          tree src/modules/ || find src/modules/ -type f | sort
+
+  # Pattern 5: Environment-Specific Outputs
+  environment-specific:
+    name: Environment-Specific Outputs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Organize by environment
+        run: |
+          # Determine environment
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            ENV="production"
+          elif [ "${{ github.ref }}" == "refs/heads/staging" ]; then
+            ENV="staging"
+          else
+            ENV="development"
+          fi
+
+          echo "Environment: $ENV"
+
+          # Organize into environment-specific directory
+          mkdir -p "environments/$ENV/generated"
+
+          find schemas -name "generated.*" | while read file; do
+            cp "$file" "environments/$ENV/generated/"
+          done
+
+          echo "✅ Copied to environments/$ENV/generated/"
+
+  # Pattern 6: Versioned Outputs
+  versioned-outputs:
+    name: Versioned Outputs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        id: lumos
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Create versioned output
+        run: |
+          # Get version from package.json or use git hash
+          VERSION=$(git rev-parse --short HEAD)
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+          # Create versioned directory
+          OUTPUT_DIR="generated/v${VERSION}-${TIMESTAMP}"
+          mkdir -p "$OUTPUT_DIR"
+
+          # Copy all generated files with versioning
+          find schemas -name "generated.*" -exec cp {} "$OUTPUT_DIR/" \;
+
+          # Create latest symlink
+          ln -sf "v${VERSION}-${TIMESTAMP}" generated/latest
+
+          echo "✅ Created versioned output: $OUTPUT_DIR"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Upload versioned artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-code-${{ steps.lumos.outputs.version }}
+          path: generated/v*/
+
+  # Pattern 7: Dynamic Configuration
+  dynamic-config:
+    name: Dynamic Configuration from JSON
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Create example config file (in real usage, this would exist in repo)
+      - name: Create config file
+        run: |
+          cat > .lumos-output.json <<EOF
+          {
+            "rust": {
+              "outputPath": "programs/src/schemas",
+              "rename": true,
+              "format": true
+            },
+            "typescript": {
+              "outputPath": "client/src/types",
+              "rename": true,
+              "format": false
+            }
+          }
+          EOF
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Organize based on config
+        run: |
+          # Read configuration
+          RUST_PATH=$(jq -r '.rust.outputPath' .lumos-output.json)
+          TS_PATH=$(jq -r '.typescript.outputPath' .lumos-output.json)
+          RUST_RENAME=$(jq -r '.rust.rename' .lumos-output.json)
+          TS_RENAME=$(jq -r '.typescript.rename' .lumos-output.json)
+
+          # Create directories
+          mkdir -p "$RUST_PATH" "$TS_PATH"
+
+          # Organize Rust files
+          if [ "$RUST_RENAME" == "true" ]; then
+            find schemas -name "*.lumos" | while read schema; do
+              name=$(basename "$schema" .lumos)
+              dir=$(dirname "$schema")
+              [ -f "$dir/generated.rs" ] && \
+                mv "$dir/generated.rs" "$RUST_PATH/${name}.rs"
+            done
+          else
+            find schemas -name "generated.rs" -exec mv {} "$RUST_PATH/" \;
+          fi
+
+          # Organize TypeScript files
+          if [ "$TS_RENAME" == "true" ]; then
+            find schemas -name "*.lumos" | while read schema; do
+              name=$(basename "$schema" .lumos)
+              dir=$(dirname "$schema")
+              [ -f "$dir/generated.ts" ] && \
+                mv "$dir/generated.ts" "$TS_PATH/${name}.ts"
+            done
+          else
+            find schemas -name "generated.ts" -exec mv {} "$TS_PATH/" \;
+          fi
+
+          echo "✅ Organized per configuration"
+
+  # Pattern 8: Workspace-Based (Cargo/npm)
+  workspace-based:
+    name: Workspace-Based Organization
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Organize for Cargo workspace
+        run: |
+          # Organize Rust files into Cargo workspace structure
+          mkdir -p crates/schema-types/src
+
+          find schemas -name "generated.rs" | while read file; do
+            schema_name=$(basename $(dirname "$file"))
+            mv "$file" "crates/schema-types/src/${schema_name}.rs"
+          done
+
+          # Create/update mod.rs
+          cat > crates/schema-types/src/lib.rs <<EOF
+          // Auto-generated module exports
+          EOF
+
+          find crates/schema-types/src -name "*.rs" ! -name "lib.rs" | while read file; do
+            module=$(basename "$file" .rs)
+            echo "pub mod $module;" >> crates/schema-types/src/lib.rs
+          done
+
+      - name: Organize for npm workspace
+        run: |
+          # Organize TypeScript files into npm workspace
+          mkdir -p packages/schema-types/src
+
+          find schemas -name "generated.ts" | while read file; do
+            schema_name=$(basename $(dirname "$file"))
+            mv "$file" "packages/schema-types/src/${schema_name}.ts"
+          done
+
+          # Create index.ts
+          cat > packages/schema-types/src/index.ts <<EOF
+          // Auto-generated exports
+          EOF
+
+          find packages/schema-types/src -name "*.ts" ! -name "index.ts" | while read file; do
+            module=$(basename "$file" .ts)
+            echo "export * from './$module';" >> packages/schema-types/src/index.ts
+          done
+
+  # Pattern 9: CI/CD Pipeline Optimized
+  cicd-optimized:
+    name: CI/CD Pipeline Optimized
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Organize for deployment
+        run: |
+          # Create deployment-ready structure
+          mkdir -p deploy/{programs,client}/generated
+
+          # Copy Rust to programs deployment
+          find schemas -name "generated.rs" -exec cp {} deploy/programs/generated/ \;
+
+          # Copy TypeScript to client deployment
+          find schemas -name "generated.ts" -exec cp {} deploy/client/generated/ \;
+
+          # Create deployment manifest
+          cat > deploy/manifest.json <<EOF
+          {
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "commit": "${{ github.sha }}",
+            "branch": "${{ github.ref_name }}",
+            "schemas": $(find schemas -name "*.lumos" | wc -l),
+            "generated_files": {
+              "rust": $(find deploy/programs/generated -name "*.rs" | wc -l),
+              "typescript": $(find deploy/client/generated -name "*.ts" | wc -l)
+            }
+          }
+          EOF
+
+      - name: Upload deployment package
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-package
+          path: deploy/
+
+  # Pattern 10: Git Submodule Ready
+  git-submodule-ready:
+    name: Git Submodule Ready
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+
+      - name: Organize for git submodules
+        run: |
+          # Create separate directories for potential submodules
+          mkdir -p submodules/rust-schemas/src
+          mkdir -p submodules/ts-schemas/src
+
+          # Move Rust files
+          find schemas -name "generated.rs" | while read file; do
+            name=$(basename $(dirname "$file"))
+            mv "$file" "submodules/rust-schemas/src/${name}.rs"
+          done
+
+          # Move TypeScript files
+          find schemas -name "generated.ts" | while read file; do
+            name=$(basename $(dirname "$file"))
+            mv "$file" "submodules/ts-schemas/src/${name}.ts"
+          done
+
+          # Each submodule could be added as:
+          # git submodule add <url> submodules/rust-schemas
+          # git submodule add <url> submodules/ts-schemas
+
+  # Summary of Directory Structures:
+  #
+  # Pattern 1 (Standard):
+  # src/generated/
+  # ├── generated.rs
+  # └── generated.ts
+  #
+  # Pattern 2 (Separate):
+  # programs/src/generated/generated.rs
+  # client/src/generated/generated.ts
+  #
+  # Pattern 3 (Build):
+  # build/generated/
+  # ├── rust/generated.rs
+  # └── typescript/generated.ts
+  #
+  # Pattern 4 (Module):
+  # src/modules/
+  # ├── game/
+  # │   ├── player.rs
+  # │   └── player.ts
+  # └── auth/
+  #     ├── user.rs
+  #     └── user.ts
+  #
+  # Pattern 8 (Workspace):
+  # crates/schema-types/src/
+  # ├── lib.rs
+  # ├── player.rs
+  # └── inventory.rs
+  # packages/schema-types/src/
+  # ├── index.ts
+  # ├── player.ts
+  # └── inventory.ts

@@ -1,0 +1,471 @@
+name: Emergency Override & Hotfix Patterns
+
+# Demonstrates three emergency bypass strategies for critical production fixes:
+# 1. Label-based bypass (hotfix label)
+# 2. Branch name pattern bypass (hotfix/* branches)
+# 3. Emergency mode file (repository-wide bypass)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  # ========================================
+  # Strategy 1: Label-Based Hotfix Bypass
+  # ========================================
+  validate-with-label-bypass:
+    name: Validate (Label Bypass)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Check for hotfix label
+      - name: Check for hotfix label
+        id: hotfix-check
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const isHotfix = labels.some(l => l.name === 'hotfix');
+
+            if (isHotfix) {
+              core.warning('🚨 HOTFIX LABEL DETECTED');
+              core.warning('Schema validation will be bypassed');
+              core.warning('This should ONLY be used for critical production fixes');
+              core.warning('A follow-up PR MUST be created to fix schema drift');
+
+              // Post warning comment
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## 🚨 HOTFIX MODE ACTIVATED
+
+**Schema validation bypassed** due to \`hotfix\` label.
+
+### ⚠️ REQUIRED FOLLOW-UP ACTIONS
+
+- [ ] **Create follow-up PR** to fix schema drift
+- [ ] **Link follow-up PR** in this PR description
+- [ ] **Document incident** explaining why hotfix was necessary
+- [ ] **Remove hotfix label** after follow-up PR merged
+
+### Why was hotfix needed?
+
+Please document in PR description:
+- What production issue occurred?
+- Why couldn't code be regenerated normally?
+- What is the plan to fix drift?
+
+**Reviewers:** Verify this truly requires emergency treatment.
+                `
+              });
+            }
+
+            return isHotfix ? 'true' : 'false';
+
+      # Run validation with conditional failure
+      - name: Validate schemas
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+          # Skip drift check if hotfix label present
+          fail-on-drift: ${{ steps.hotfix-check.outputs.result != 'true' }}
+          comment-on-pr: true
+
+      # Log bypass
+      - name: Log hotfix bypass
+        if: steps.hotfix-check.outputs.result == 'true'
+        run: |
+          echo "::warning::🚨 HOTFIX MODE: Schema drift enforcement bypassed"
+          echo "::warning::Follow-up PR required to fix drift"
+
+  # ========================================
+  # Strategy 2: Branch Name Pattern Bypass
+  # ========================================
+  validate-with-branch-bypass:
+    name: Validate (Branch Pattern Bypass)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Check branch name pattern
+      - name: Check if hotfix branch
+        id: branch-check
+        run: |
+          # Get branch name (works for PRs and pushes)
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            branch_name="${{ github.head_ref }}"
+          else
+            branch_name="${{ github.ref_name }}"
+          fi
+
+          echo "Branch: $branch_name"
+
+          # Check if matches hotfix pattern
+          if [[ "$branch_name" =~ ^hotfix/ ]]; then
+            echo "is-hotfix=true" >> $GITHUB_OUTPUT
+            echo "::warning::🚨 Hotfix branch detected: $branch_name"
+            echo "::warning::Schema validation will be relaxed"
+          elif [[ "$branch_name" =~ ^emergency/ ]]; then
+            echo "is-hotfix=true" >> $GITHUB_OUTPUT
+            echo "::warning::🚨 Emergency branch detected: $branch_name"
+            echo "::warning::Schema validation will be relaxed"
+          else
+            echo "is-hotfix=false" >> $GITHUB_OUTPUT
+            echo "Regular branch: $branch_name"
+          fi
+
+      # Post warning for hotfix branches
+      - name: Post hotfix warning
+        if: |
+          github.event_name == 'pull_request' &&
+          steps.branch-check.outputs.is-hotfix == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branchName = '${{ github.head_ref }}';
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🚨 Emergency Branch Pattern Detected
+
+Branch \`${branchName}\` matches hotfix/emergency pattern.
+
+**Schema validation relaxed** for emergency deployment.
+
+### Branch Naming Convention
+- \`hotfix/*\` - Critical production fixes
+- \`emergency/*\` - Emergency deployments
+- All other branches - Normal validation
+
+### Required Actions
+- [ ] Document emergency in PR description
+- [ ] Create follow-up PR to fix schema drift
+- [ ] Link follow-up PR in description
+
+**Merge only if truly necessary for production.**
+              `
+            });
+
+      # Run validation
+      - name: Validate schemas
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+          fail-on-drift: ${{ steps.branch-check.outputs.is-hotfix != 'true' }}
+          comment-on-pr: true
+
+  # ========================================
+  # Strategy 3: Emergency Mode File
+  # ========================================
+  validate-with-emergency-mode:
+    name: Validate (Emergency Mode File)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Check for emergency mode file
+      - name: Check emergency mode
+        id: emergency
+        run: |
+          # Check if emergency mode file exists
+          if [ -f ".github/EMERGENCY_MODE" ]; then
+            echo "enabled=true" >> $GITHUB_OUTPUT
+
+            echo "::warning::🚨 EMERGENCY MODE ACTIVE"
+            echo "::warning::Schema validation is DISABLED repository-wide"
+
+            # Check when it was created
+            if [ -f ".github/EMERGENCY_MODE" ]; then
+              created=$(git log -1 --format=%ct -- .github/EMERGENCY_MODE 2>/dev/null || echo "0")
+              now=$(date +%s)
+
+              if [ "$created" != "0" ]; then
+                hours=$(( ($now - $created) / 3600 ))
+                echo "::warning::Emergency mode active for $hours hours"
+
+                # Alert if active too long
+                if [ $hours -gt 24 ]; then
+                  echo "::error::⚠️ Emergency mode active for >24 hours!"
+                  echo "::error::Please disable emergency mode: rm .github/EMERGENCY_MODE"
+                fi
+
+                if [ $hours -gt 72 ]; then
+                  echo "::error::🚨 CRITICAL: Emergency mode active for >72 hours!"
+                fi
+              fi
+            fi
+
+            # Read reason if exists
+            if [ -f ".github/EMERGENCY_MODE" ]; then
+              echo "Reason for emergency mode:"
+              cat .github/EMERGENCY_MODE
+            fi
+          else
+            echo "enabled=false" >> $GITHUB_OUTPUT
+            echo "Normal mode - schema validation enabled"
+          fi
+
+      # Post emergency mode warning
+      - name: Post emergency mode notice
+        if: |
+          github.event_name == 'pull_request' &&
+          steps.emergency.outputs.enabled == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🚨 REPOSITORY IN EMERGENCY MODE
+
+**Schema validation is DISABLED** repository-wide.
+
+All PRs are allowed to merge with schema drift.
+
+### Emergency Mode File
+
+Emergency mode was enabled via \`.github/EMERGENCY_MODE\` file.
+
+### To Disable Emergency Mode
+
+\`\`\`bash
+git rm .github/EMERGENCY_MODE
+git commit -m "chore: Disable emergency mode"
+git push origin main
+\`\`\`
+
+**This should be disabled as soon as the emergency is resolved.**
+
+### When to Use Emergency Mode
+- Critical production outage requiring immediate fixes
+- Multiple PRs need to merge during incident
+- Temporary bypass needed during migration
+
+**Overuse degrades code quality. Use sparingly.**
+              `
+            });
+
+      # Run validation
+      - name: Validate schemas
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+          fail-on-drift: ${{ steps.emergency.outputs.enabled != 'true' }}
+          comment-on-pr: true
+
+      # Alert if emergency mode is stale
+      - name: Alert on stale emergency mode
+        if: steps.emergency.outputs.enabled == 'true'
+        run: |
+          created=$(git log -1 --format=%ct -- .github/EMERGENCY_MODE 2>/dev/null || echo "0")
+          now=$(date +%s)
+
+          if [ "$created" != "0" ]; then
+            hours=$(( ($now - $created) / 3600 ))
+
+            if [ $hours -gt 72 ]; then
+              echo "::error::🚨 CRITICAL: Emergency mode active for $hours hours!"
+              echo "::error::This is likely forgotten. Please disable immediately."
+              exit 1  # Fail workflow if stale >72h
+            fi
+          fi
+
+# ========================================
+# SETUP INSTRUCTIONS
+# ========================================
+#
+# Choose ONE of the three strategies, or combine them.
+#
+# Strategy 1: Label-Based Bypass
+# -------------------------------
+# 1. Create hotfix label:
+#    gh label create "hotfix" --color "D93F0B" \
+#      --description "Emergency fix - bypasses schema validation"
+#
+# 2. To use:
+#    - Add "hotfix" label to PR
+#    - Validation automatically bypassed
+#    - Warning comment posted
+#
+# 3. Best for: Individual emergency PRs
+#
+# Strategy 2: Branch Pattern Bypass
+# ----------------------------------
+# 1. Use branch naming convention:
+#    - hotfix/*     - For critical production fixes
+#    - emergency/*  - For emergency deployments
+#    - Other        - Normal validation
+#
+# 2. To use:
+#    git checkout -b hotfix/fix-critical-bug
+#    git push origin hotfix/fix-critical-bug
+#
+# 3. Best for: Enforcing process via naming
+#
+# Strategy 3: Emergency Mode File
+# --------------------------------
+# 1. To enable emergency mode:
+#    echo "Production outage - incident #123" > .github/EMERGENCY_MODE
+#    git add .github/EMERGENCY_MODE
+#    git commit -m "EMERGENCY: Enable emergency mode for incident #123"
+#    git push origin main
+#
+# 2. To disable:
+#    git rm .github/EMERGENCY_MODE
+#    git commit -m "chore: Disable emergency mode"
+#    git push origin main
+#
+# 3. Best for: Site-wide emergencies, multiple PRs
+#
+# Combined Strategy
+# -----------------
+# Use all three in priority order:
+# 1. Emergency mode file (site-wide)
+# 2. Hotfix label (per-PR)
+# 3. Branch pattern (process enforcement)
+#
+# Modify validation step:
+#
+# fail-on-drift: ${{
+#   steps.emergency.outputs.enabled != 'true' &&
+#   steps.hotfix-check.outputs.result != 'true' &&
+#   steps.branch-check.outputs.is-hotfix != 'true'
+# }}
+#
+# ========================================
+# USAGE EXAMPLES
+# ========================================
+#
+# Example 1: Production Outage (Emergency Mode)
+# ----------------------------------------------
+# Scenario: Production down, need multiple hotfix PRs
+#
+# 1. Enable emergency mode:
+#    echo "Production outage - DB schema mismatch" > .github/EMERGENCY_MODE
+#    git add .github/EMERGENCY_MODE
+#    git commit -m "EMERGENCY: Enable bypass for production outage"
+#    git push
+#
+# 2. Create and merge multiple hotfix PRs (all bypass validation)
+#
+# 3. After outage resolved:
+#    git rm .github/EMERGENCY_MODE
+#    git commit -m "chore: Disable emergency mode - outage resolved"
+#    git push
+#
+# 4. Create follow-up PRs to fix schema drift
+#
+# Example 2: Single Critical Fix (Hotfix Label)
+# ----------------------------------------------
+# Scenario: One critical bug, can't regenerate code immediately
+#
+# 1. Create PR with fix
+# 2. Add hotfix label:
+#    gh pr edit 123 --add-label "hotfix"
+#
+# 3. Merge PR (validation bypassed)
+#
+# 4. Create follow-up PR:
+#    git checkout -b fix/regenerate-schemas
+#    lumos generate schemas/**/*.lumos
+#    git add .
+#    git commit -m "chore: Regenerate code after hotfix #123"
+#    git push
+#
+# Example 3: Branch Pattern (Process Enforcement)
+# ------------------------------------------------
+# Scenario: Team wants to enforce process via naming
+#
+# 1. Create hotfix branch:
+#    git checkout -b hotfix/fix-auth-bug
+#
+# 2. Push and create PR (validation automatically relaxed)
+#
+# 3. PR description must document:
+#    - Why hotfix needed
+#    - Follow-up plan
+#
+# ========================================
+# BEST PRACTICES
+# ========================================
+#
+# ✅ DO:
+# - Document why bypass was necessary
+# - Create follow-up PR to fix drift
+# - Disable emergency mode ASAP
+# - Review hotfix PRs more carefully
+# - Track emergency mode usage
+#
+# ❌ DON'T:
+# - Leave emergency mode enabled indefinitely
+# - Use hotfix for non-critical changes
+# - Skip follow-up PRs
+# - Abuse bypass mechanisms
+# - Use as workaround for lazy regeneration
+#
+# Emergency bypasses should be RARE.
+# If used frequently, investigate root cause:
+# - Schema changes too complex?
+# - Generation process broken?
+# - Team needs training?
+#
+# ========================================
+# MONITORING
+# ========================================
+#
+# Track emergency bypass usage:
+#
+# 1. Count hotfix PRs:
+#    gh pr list --label "hotfix" --state merged
+#
+# 2. Check emergency mode duration:
+#    git log --all --format=%ct --follow .github/EMERGENCY_MODE
+#
+# 3. Alert on abuse:
+#    - >5 hotfix PRs per month → Review process
+#    - Emergency mode >24h → Alert team
+#    - Emergency mode >72h → Fail workflow
+#
+# 4. Require post-incident review:
+#    - What caused the emergency?
+#    - How to prevent in future?
+#    - Were bypasses appropriate?
+#
+# ========================================
+# TROUBLESHOOTING
+# ========================================
+#
+# Label bypass not working:
+#   - Verify label name: "hotfix" (exact match)
+#   - Check result-encoding: string (not json)
+#   - Verify output: steps.hotfix-check.outputs.result
+#
+# Branch pattern not matching:
+#   - Check regex: ^hotfix/ or ^emergency/
+#   - Use head_ref for PRs, ref_name for pushes
+#   - Test pattern: [[ "hotfix/test" =~ ^hotfix/ ]]
+#
+# Emergency mode file not detected:
+#   - Ensure checkout@v4 runs first
+#   - File must be committed (not just present)
+#   - Check path: .github/EMERGENCY_MODE (exact)
+#
+# Stale emergency mode not alerting:
+#   - git log must have history for file
+#   - Date calculation requires file in git
+#   - Manual check: git log --follow .github/EMERGENCY_MODE
+#
+# See docs/branch-protection.md for detailed troubleshooting

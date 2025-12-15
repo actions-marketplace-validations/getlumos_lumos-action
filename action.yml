@@ -56,6 +56,7 @@ runs:
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         toolchain: stable
+        cache: false
 
     - name: Install LUMOS CLI
       shell: bash
@@ -78,8 +79,21 @@ runs:
       run: |
         echo "Validating LUMOS schemas..."
 
-        # Find all schema files
-        SCHEMA_FILES=$(find . -path "${{ inputs.schema }}" -type f)
+        # Find all schema files (use -name for globs, fallback to exact match)
+        SCHEMA_PATTERN="${{ inputs.schema }}"
+        if [[ "$SCHEMA_PATTERN" == *"*"* ]]; then
+          # Pattern contains wildcard, use find with -name
+          SCHEMA_FILES=$(find . -name "*.lumos" -type f)
+        else
+          # Exact path, ensure it exists
+          if [ -f "$SCHEMA_PATTERN" ]; then
+            SCHEMA_FILES="$SCHEMA_PATTERN"
+          else
+            echo "::error file=$SCHEMA_PATTERN::Schema file not found"
+            exit 1
+          fi
+        fi
+
         SCHEMA_COUNT=$(echo "$SCHEMA_FILES" | wc -l | tr -d ' ')
 
         echo "Found $SCHEMA_COUNT schema file(s)"
@@ -109,14 +123,29 @@ runs:
       run: |
         echo "Generating code from LUMOS schemas..."
 
-        # Find all schema files
-        SCHEMA_FILES=$(find . -path "${{ inputs.schema }}" -type f)
+        # Find all schema files (use -name for globs, fallback to exact match)
+        SCHEMA_PATTERN="${{ inputs.schema }}"
+        if [[ "$SCHEMA_PATTERN" == *"*"* ]]; then
+          # Pattern contains wildcard, use find with -name
+          SCHEMA_FILES=$(find . -name "*.lumos" -type f)
+        else
+          # Exact path, ensure it exists
+          if [ -f "$SCHEMA_PATTERN" ]; then
+            SCHEMA_FILES="$SCHEMA_PATTERN"
+          else
+            echo "::error file=$SCHEMA_PATTERN::Schema file not found"
+            exit 1
+          fi
+        fi
+
         GENERATED_COUNT=0
 
         # Generate from each schema
         for schema in $SCHEMA_FILES; do
           echo "Generating from $schema..."
-          if lumos generate "$schema"; then
+          # Get directory of schema file to output generated files in same location
+          schema_dir=$(dirname "$schema")
+          if lumos generate "$schema" --output "$schema_dir"; then
             GENERATED_COUNT=$((GENERATED_COUNT + 1))
           else
             echo "::error file=$schema::Code generation failed"
@@ -182,7 +211,7 @@ runs:
 
     - name: Comment on PR
       if: inputs.comment-on-pr == 'true' && github.event_name == 'pull_request'
-      uses: actions/github-script@v7
+      uses: actions/github-script@v8
       with:
         script: |
           const driftDetected = '${{ steps.drift.outputs.drift-detected }}' === 'true';

@@ -1,0 +1,17 @@
+// Test schema for CI/CD validation
+// This file is used to test the LUMOS GitHub Action
+
+#[solana]
+#[account]
+struct TestAccount {
+    owner: PublicKey,
+    amount: u64,
+    is_active: bool,
+}
+
+#[solana]
+enum TestState {
+    Pending,
+    Active,
+    Completed,
+}

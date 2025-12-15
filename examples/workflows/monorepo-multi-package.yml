@@ -1,0 +1,355 @@
+name: Monorepo Multi-Package Generation
+
+# Complete example showing how to handle multiple packages in a monorepo
+# Each package has its own schemas and generated code
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  # Strategy 1: Matrix - Generate each package independently
+  matrix-generation:
+    name: Generate ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false  # Don't cancel other packages if one fails
+      max-parallel: 4   # Run 4 packages in parallel
+      matrix:
+        package:
+          - auth
+          - payments
+          - users
+          - analytics
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate ${{ matrix.package }} schemas
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'packages/${{ matrix.package }}/schemas/*.lumos'
+          working-directory: 'packages/${{ matrix.package }}'
+          fail-on-drift: ${{ github.event_name == 'pull_request' }}
+
+      - name: Organize ${{ matrix.package }} outputs
+        run: |
+          cd packages/${{ matrix.package }}
+          mkdir -p generated/rust generated/typescript
+
+          # Move generated files to organized directories
+          find schemas -name "generated.rs" \
+            -exec mv {} generated/rust/ \; 2>/dev/null || true
+          find schemas -name "generated.ts" \
+            -exec mv {} generated/typescript/ \; 2>/dev/null || true
+
+      - name: Upload ${{ matrix.package }} artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-${{ matrix.package }}
+          path: packages/${{ matrix.package }}/generated/
+
+  # Strategy 2: Sequential - Generate all packages in one job
+  sequential-generation:
+    name: Generate All Packages (Sequential)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate all schemas
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'packages/*/schemas/*.lumos'
+          fail-on-drift: false  # Handle drift manually
+
+      - name: Organize all package outputs
+        run: |
+          for package in packages/*/; do
+            pkg_name=$(basename "$package")
+            echo "Organizing $pkg_name..."
+
+            cd "$package"
+            mkdir -p generated/rust generated/typescript
+
+            # Move generated files
+            find schemas -name "generated.rs" \
+              -exec mv {} generated/rust/ \; 2>/dev/null || true
+            find schemas -name "generated.ts" \
+              -exec mv {} generated/typescript/ \; 2>/dev/null || true
+
+            cd ../..
+          done
+
+      - name: Check for drift
+        id: drift
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "drift_detected=true" >> $GITHUB_OUTPUT
+
+            # List changed packages
+            changed_packages=$(git diff --name-only | \
+              grep '^packages/' | \
+              cut -d'/' -f2 | \
+              sort -u | \
+              tr '\n' ',' | \
+              sed 's/,$//')
+
+            echo "changed_packages=$changed_packages" >> $GITHUB_OUTPUT
+          else
+            echo "drift_detected=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fail on drift (PRs only)
+        if: |
+          github.event_name == 'pull_request' &&
+          steps.drift.outputs.drift_detected == 'true'
+        run: |
+          echo "::error::Drift detected in packages: ${{ steps.drift.outputs.changed_packages }}"
+          exit 1
+
+  # Strategy 3: Centralized - Collect all generated code in one directory
+  centralized-generation:
+    name: Centralized Generated Code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate all schemas
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'packages/*/schemas/*.lumos'
+          fail-on-drift: false
+
+      - name: Centralize all generated code
+        run: |
+          mkdir -p generated/rust generated/typescript
+
+          # Copy all Rust files with package name prefix
+          find packages -type f -name "generated.rs" | while read file; do
+            package=$(echo "$file" | cut -d'/' -f2)
+            cp "$file" "generated/rust/${package}.rs"
+          done
+
+          # Copy all TypeScript files with package name prefix
+          find packages -type f -name "generated.ts" | while read file; do
+            package=$(echo "$file" | cut -d'/' -f2)
+            cp "$file" "generated/typescript/${package}.ts"
+          done
+
+      - name: Show centralized structure
+        run: |
+          echo "=== Centralized Generated Code ==="
+          tree generated/ || ls -R generated/
+
+      - name: Upload centralized artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: centralized-generated-code
+          path: generated/
+
+  # Strategy 4: Smart - Only generate changed packages
+  smart-generation:
+    name: Smart Generation (Changed Packages Only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for comparison
+
+      - name: Detect changed packages
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            auth:
+              - 'packages/auth/schemas/**'
+            payments:
+              - 'packages/payments/schemas/**'
+            users:
+              - 'packages/users/schemas/**'
+            analytics:
+              - 'packages/analytics/schemas/**'
+
+      - name: Generate auth package
+        if: steps.changes.outputs.auth == 'true'
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'packages/auth/schemas/*.lumos'
+          working-directory: 'packages/auth'
+
+      - name: Generate payments package
+        if: steps.changes.outputs.payments == 'true'
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'packages/payments/schemas/*.lumos'
+          working-directory: 'packages/payments'
+
+      - name: Generate users package
+        if: steps.changes.outputs.users == 'true'
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'packages/users/schemas/*.lumos'
+          working-directory: 'packages/users'
+
+      - name: Generate analytics package
+        if: steps.changes.outputs.analytics == 'true'
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'packages/analytics/schemas/*.lumos'
+          working-directory: 'packages/analytics'
+
+      - name: Report generated packages
+        run: |
+          echo "=== Packages Generated ==="
+          [ "${{ steps.changes.outputs.auth }}" == "true" ] && echo "- auth"
+          [ "${{ steps.changes.outputs.payments }}" == "true" ] && echo "- payments"
+          [ "${{ steps.changes.outputs.users }}" == "true" ] && echo "- users"
+          [ "${{ steps.changes.outputs.analytics }}" == "true" ] && echo "- analytics"
+
+  # Strategy 5: With auto-commit on main branch
+  auto-commit-main:
+    name: Auto-Commit on Main Branch
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate all schemas
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'packages/*/schemas/*.lumos'
+          fail-on-drift: false  # Don't fail, we'll commit changes
+
+      - name: Organize generated code
+        run: |
+          for package in packages/*/; do
+            cd "$package"
+            mkdir -p generated/rust generated/typescript
+
+            find schemas -name "generated.rs" \
+              -exec mv {} generated/rust/ \; 2>/dev/null || true
+            find schemas -name "generated.ts" \
+              -exec mv {} generated/typescript/ \; 2>/dev/null || true
+
+            cd ../..
+          done
+
+      - name: Commit generated code
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add packages/*/generated/
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: Update generated code from schemas [skip ci]"
+            git push
+          fi
+
+  # Strategy 6: Per-package with custom naming
+  custom-naming:
+    name: Custom Naming Per Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate all schemas
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'packages/*/schemas/*.lumos'
+
+      - name: Rename with schema names
+        run: |
+          for package in packages/*/; do
+            pkg_name=$(basename "$package")
+
+            # Find all schemas in this package
+            find "$package/schemas" -name "*.lumos" | while read schema; do
+              schema_name=$(basename "$schema" .lumos)
+              schema_dir=$(dirname "$schema")
+
+              # Rename Rust file with schema name
+              if [ -f "$schema_dir/generated.rs" ]; then
+                mkdir -p "$package/src/generated"
+                mv "$schema_dir/generated.rs" \
+                   "$package/src/generated/${schema_name}.rs"
+              fi
+
+              # Rename TypeScript file with schema name
+              if [ -f "$schema_dir/generated.ts" ]; then
+                mkdir -p "$package/src/types"
+                mv "$schema_dir/generated.ts" \
+                   "$package/src/types/${schema_name}.ts"
+              fi
+            done
+          done
+
+      - name: Show renamed structure
+        run: |
+          echo "=== Renamed Generated Files ==="
+          find packages -path "*/src/generated/*.rs" -o -path "*/src/types/*.ts" | sort
+
+  # Strategy 7: Validation matrix (for large monorepos)
+  validation-matrix:
+    name: Validate Packages (Matrix)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [auth, payments, users, analytics]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate ${{ matrix.package }}
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'packages/${{ matrix.package }}/schemas/*.lumos'
+          check-only: true  # Only validate, don't generate
+          fail-on-drift: true
+
+      - name: Report validation status
+        if: success()
+        run: |
+          echo "✅ ${{ matrix.package }} schemas validated successfully"
+
+  # Example monorepo directory structure this supports:
+  #
+  # monorepo/
+  # ├── packages/
+  # │   ├── auth/
+  # │   │   ├── schemas/
+  # │   │   │   ├── user.lumos
+  # │   │   │   └── session.lumos
+  # │   │   └── generated/
+  # │   │       ├── rust/
+  # │   │       │   └── generated.rs
+  # │   │       └── typescript/
+  # │   │           └── generated.ts
+  # │   ├── payments/
+  # │   │   ├── schemas/
+  # │   │   │   └── transaction.lumos
+  # │   │   └── generated/
+  # │   │       ├── rust/
+  # │   │       │   └── generated.rs
+  # │   │       └── typescript/
+  # │   │           └── generated.ts
+  # │   └── users/
+  # │       ├── schemas/
+  # │       │   └── profile.lumos
+  # │       └── generated/
+  # │           ├── rust/
+  # │           │   └── generated.rs
+  # │           └── typescript/
+  # │               └── generated.ts
+  # └── generated/  (if using centralized strategy)
+  #     ├── rust/
+  #     │   ├── auth.rs
+  #     │   ├── payments.rs
+  #     │   └── users.rs
+  #     └── typescript/
+  #         ├── auth.ts
+  #         ├── payments.ts
+  #         └── users.ts

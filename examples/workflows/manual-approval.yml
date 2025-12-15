@@ -1,0 +1,399 @@
+name: Manual Approval Workflow
+
+# Demonstrates three manual approval strategies:
+# 1. Label-based approval (simplest)
+# 2. User-based approval (specific maintainers)
+# 3. Team-based approval (GitHub teams)
+
+on:
+  pull_request:
+
+jobs:
+  # ========================================
+  # Detect Schema Drift
+  # ========================================
+  detect-drift:
+    name: Detect Schema Drift
+    runs-on: ubuntu-latest
+    outputs:
+      drift-detected: ${{ steps.lumos.outputs.drift-detected }}
+      diff-summary: ${{ steps.lumos.outputs.diff-summary }}
+      schemas-validated: ${{ steps.lumos.outputs.schemas-validated }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate schemas
+        id: lumos
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+          fail-on-drift: false  # Don't fail yet - check approval first
+          comment-on-pr: false  # Custom comment in next job
+
+  # ========================================
+  # Strategy 1: Label-Based Approval
+  # ========================================
+  label-approval:
+    name: Check Label Approval
+    needs: detect-drift
+    if: needs.detect-drift.outputs.drift-detected == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post drift warning
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const diffSummary = `${{ needs.detect-drift.outputs.diff-summary }}`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## ⚠️ Schema Drift Detected
+
+Generated code is out of sync with schemas.
+
+### Option 1: Regenerate Code (Recommended)
+
+\`\`\`bash
+lumos generate schemas/**/*.lumos
+git add .
+git commit -m "chore: Regenerate code from schemas"
+git push
+\`\`\`
+
+### Option 2: Manual Approval
+
+If this drift is intentional (e.g., incremental migration):
+
+**Maintainers:** Add the \`schema-drift-approved\` label to approve this PR.
+
+\`\`\`bash
+gh pr edit ${{ github.event.pull_request.number }} --add-label "schema-drift-approved"
+\`\`\`
+
+### Affected Files
+
+\`\`\`diff
+${diffSummary}
+\`\`\`
+
+---
+
+**Why manual approval might be needed:**
+- Incremental schema migration across multiple PRs
+- Temporary drift during refactoring
+- Generated code intentionally hand-modified (not recommended)
+
+⚠️ **Manual approval should be rare.** Most PRs should regenerate code.
+              `
+            });
+
+      - name: Check for approval label
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const hasApproval = labels.some(l => l.name === 'schema-drift-approved');
+
+            if (!hasApproval) {
+              core.setFailed(
+                '❌ Schema drift detected.\n' +
+                '   Fix: Regenerate code OR add label "schema-drift-approved"'
+              );
+            } else {
+              core.info('✅ Manual approval granted via label');
+
+              // Post approval confirmation comment
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: '✅ **Manual approval granted** - Schema drift approved by maintainer via label.'
+              });
+            }
+
+  # ========================================
+  # Strategy 2: User-Based Approval
+  # ========================================
+  user-approval:
+    name: Check User Approval
+    needs: detect-drift
+    if: needs.detect-drift.outputs.drift-detected == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for maintainer approval
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // CONFIGURE: Update with your maintainer GitHub usernames
+            const maintainers = ['alice', 'bob', 'charlie'];
+
+            // Fetch all PR reviews
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            // Check if any maintainer approved
+            const approvals = reviews.filter(r =>
+              r.state === 'APPROVED' &&
+              maintainers.includes(r.user.login)
+            );
+
+            if (approvals.length === 0) {
+              core.setFailed(
+                '❌ Schema drift requires approval from maintainers:\n' +
+                '   ' + maintainers.map(m => '@' + m).join(', ') + '\n\n' +
+                'Maintainers: Review the PR and click "Approve" if drift is intentional.'
+              );
+
+              // Post comment requesting review
+              await github.rest.pulls.requestReviewers({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                reviewers: maintainers,
+              });
+
+            } else {
+              const approver = approvals[0];
+              core.info(`✅ Approved by maintainer: ${approver.user.login}`);
+
+              // Post approval confirmation
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `✅ **Manual approval granted** - Schema drift approved by @${approver.user.login}`
+              });
+            }
+
+  # ========================================
+  # Strategy 3: Team-Based Approval
+  # ========================================
+  team-approval:
+    name: Check Team Approval
+    needs: detect-drift
+    if: needs.detect-drift.outputs.drift-detected == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for team approval
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // CONFIGURE: Update with your GitHub organization and team slug
+            const orgName = context.repo.owner;  // e.g., 'myorg'
+            const teamSlug = 'schema-maintainers'; // e.g., 'schema-maintainers'
+
+            try {
+              // Fetch team members
+              const { data: teamMembers } = await github.rest.teams.listMembersInOrg({
+                org: orgName,
+                team_slug: teamSlug,
+              });
+
+              const teamUsernames = teamMembers.map(m => m.login);
+
+              core.info(`Team ${teamSlug} members: ${teamUsernames.join(', ')}`);
+
+              // Fetch PR reviews
+              const { data: reviews } = await github.rest.pulls.listReviews({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+              });
+
+              // Check if any team member approved
+              const teamApprovals = reviews.filter(r =>
+                r.state === 'APPROVED' &&
+                teamUsernames.includes(r.user.login)
+              );
+
+              if (teamApprovals.length === 0) {
+                core.setFailed(
+                  `❌ Schema drift requires approval from @${orgName}/${teamSlug} team\n\n` +
+                  'Team members:\n' +
+                  teamUsernames.map(m => '  - @' + m).join('\n')
+                );
+
+                // Request review from team
+                await github.rest.pulls.requestReviewers({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.issue.number,
+                  team_reviewers: [teamSlug],
+                });
+
+                // Post comment
+                await github.rest.issues.createComment({
+                  issue_number: context.issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: `## ⚠️ Team Approval Required
+
+Schema drift detected. Approval from @${orgName}/${teamSlug} team is required.
+
+**Team members who can approve:**
+${teamUsernames.map(m => '- @' + m).join('\n')}
+
+**Review requested automatically.** Team members: please review and approve if drift is intentional.
+                  `
+                });
+
+              } else {
+                const approver = teamApprovals[0];
+                core.info(`✅ Approved by team member: ${approver.user.login}`);
+
+                // Post approval confirmation
+                await github.rest.issues.createComment({
+                  issue_number: context.issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: `✅ **Team approval granted** - Schema drift approved by @${approver.user.login} (@${orgName}/${teamSlug})`
+                });
+              }
+
+            } catch (error) {
+              core.setFailed(
+                `❌ Error checking team approval: ${error.message}\n\n` +
+                `Ensure:\n` +
+                `  1. Team "${teamSlug}" exists in org "${orgName}"\n` +
+                `  2. Workflow has permissions to read team members\n` +
+                `  3. Team slug is correct (use team URL slug, not display name)`
+              );
+            }
+
+# ========================================
+# SETUP INSTRUCTIONS
+# ========================================
+#
+# Choose ONE of the three strategies above, or combine them.
+#
+# Strategy 1: Label-Based (Simplest)
+# -----------------------------------
+# 1. Create label:
+#    gh label create "schema-drift-approved" --color "0E8A16"
+#
+# 2. Keep job: label-approval
+# 3. Delete jobs: user-approval, team-approval
+#
+# Strategy 2: User-Based
+# -----------------------
+# 1. Update line 87 with maintainer GitHub usernames:
+#    const maintainers = ['alice', 'bob'];
+#
+# 2. Keep job: user-approval
+# 3. Delete jobs: label-approval, team-approval
+#
+# Strategy 3: Team-Based (Most Scalable)
+# ---------------------------------------
+# 1. Create GitHub team: Settings → Teams → New team
+#    Name: Schema Maintainers
+#    Slug: schema-maintainers
+#
+# 2. Add team members: Team → Members → Add member
+#
+# 3. Update line 147:
+#    const teamSlug = 'schema-maintainers';
+#
+# 4. Grant workflow permissions:
+#    Settings → Actions → General → Workflow permissions
+#    ✅ Read and write permissions
+#
+#    Or add to workflow file:
+#    permissions:
+#      contents: read
+#      pull-requests: write
+#      issues: write
+#      members: read  # For team access
+#
+# 5. Keep job: team-approval
+# 6. Delete jobs: label-approval, user-approval
+#
+# Combined Strategy (Flexible)
+# -----------------------------
+# Keep all three jobs. PR can be approved via:
+# - Label "schema-drift-approved", OR
+# - Maintainer user approval, OR
+# - Team approval
+#
+# Use continue-on-error to allow any strategy to pass:
+#
+# jobs:
+#   label-approval:
+#     continue-on-error: true
+#
+#   user-approval:
+#     continue-on-error: true
+#
+#   team-approval:
+#     continue-on-error: true
+#
+#   final-check:
+#     needs: [label-approval, user-approval, team-approval]
+#     if: |
+#       needs.label-approval.result == 'success' ||
+#       needs.user-approval.result == 'success' ||
+#       needs.team-approval.result == 'success'
+#     runs-on: ubuntu-latest
+#     steps:
+#       - run: echo "✅ Approval granted via at least one method"
+#
+# ========================================
+# USAGE
+# ========================================
+#
+# Developer workflow:
+#   1. Create PR with schema changes
+#   2. Drift detected, workflow fails
+#   3. Options:
+#      a) Regenerate code: lumos generate schemas/**/*.lumos
+#      b) Request manual approval from maintainers
+#
+# Maintainer workflow (label-based):
+#   1. Review PR and drift changes
+#   2. If drift is intentional:
+#      gh pr edit 123 --add-label "schema-drift-approved"
+#   3. Workflow re-runs and passes
+#
+# Maintainer workflow (review-based):
+#   1. Receive review request notification
+#   2. Review PR and drift changes
+#   3. If drift is intentional:
+#      Click "Approve" in GitHub UI
+#   4. Workflow re-runs and passes
+#
+# ========================================
+# TROUBLESHOOTING
+# ========================================
+#
+# Label not working:
+#   - Verify label name: "schema-drift-approved" (exact match)
+#   - Check label exists: gh label list
+#   - Ensure label applied to PR: gh pr view 123 --json labels
+#
+# User approval not working:
+#   - Verify usernames (case-sensitive)
+#   - Check review state: gh pr view 123 --json reviews
+#   - Review must be "APPROVED", not "COMMENTED"
+#
+# Team approval not working:
+#   - Verify team slug (use URL slug, not display name)
+#   - Check team exists: gh api orgs/:org/teams/:team
+#   - Ensure workflow has permissions: members: read
+#   - Verify team members: gh api orgs/:org/teams/:team/members
+#
+# Workflow permissions error:
+#   - Settings → Actions → Workflow permissions
+#   - Select: Read and write permissions
+#   - Or add permissions: block to workflow file
+#
+# See docs/branch-protection.md for detailed troubleshooting

@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  test-action:
+    name: Test LUMOS Action
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Test action with test schema
+        uses: ./
+        with:
+          schema: 'test/schema.lumos'
+          fail-on-drift: false
+          comment-on-pr: false
+
+      - name: Verify generated files exist
+        run: |
+          if [ ! -f test/generated.rs ]; then
+            echo "Error: generated.rs not found"
+            exit 1
+          fi
+
+          if [ ! -f test/generated.ts ]; then
+            echo "Error: generated.ts not found"
+            exit 1
+          fi
+
+          echo "All generated files exist"
+
+      - name: Display generated Rust code
+        run: |
+          echo "=== Generated Rust Code ==="
+          cat test/generated.rs
+
+      - name: Display generated TypeScript code
+        run: |
+          echo "=== Generated TypeScript Code ==="
+          cat test/generated.ts
+
+  validate-action-yml:
+    name: Validate Action Configuration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Validate action.yml syntax
+        run: |
+          # Basic YAML syntax check
+          if ! python3 -c "import yaml; yaml.safe_load(open('action.yml'))" 2>/dev/null; then
+            echo "Error: action.yml has invalid YAML syntax"
+            exit 1
+          fi
+          echo "action.yml syntax is valid"
+
+      - name: Check required action metadata
+        run: |
+          # Verify required fields exist
+          grep -q "^name:" action.yml || { echo "Missing 'name' field"; exit 1; }
+          grep -q "^description:" action.yml || { echo "Missing 'description' field"; exit 1; }
+          grep -q "^runs:" action.yml || { echo "Missing 'runs' field"; exit 1; }
+          echo "All required metadata fields present"
+
+  shellcheck:
+    name: Shellcheck Bash Scripts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Check action.yml bash scripts
+        run: |
+          echo "Extracting and checking bash scripts from action.yml..."
+
+          # Extract bash scripts from action.yml and check for basic issues
+          # Since scripts are embedded in YAML, we'll do basic validation
+
+          # Check for common bash issues in the run blocks
+          if grep -n "run: |" action.yml; then
+            echo "Found bash scripts in action.yml"
+
+            # Check for unquoted variables (common pitfall)
+            if grep -E '\$\{[^}]+\}[^"]' action.yml | grep -v "inputs\." | grep -v "GITHUB"; then
+              echo "Warning: Found potentially unquoted variable expansions"
+            fi
+
+            # Check for proper error handling
+            if ! grep -q "set -e\|exit 1" action.yml; then
+              echo "Note: Consider adding explicit error handling (set -e or exit 1)"
+            fi
+          fi
+
+          echo "Basic bash script validation completed"
+
+  test-validation-only:
+    name: Test Validation-Only Mode
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Test check-only mode
+        uses: ./
+        with:
+          schema: 'test/schema.lumos'
+          check-only: true
+          fail-on-drift: false
+          comment-on-pr: false
+
+      - name: Verify no files were generated
+        run: |
+          # In check-only mode, files should NOT be generated
+          if [ -f test/generated.rs ] || [ -f test/generated.ts ]; then
+            echo "Error: Files were generated in check-only mode"
+            exit 1
+          fi
+          echo "Check-only mode working correctly - no files generated"

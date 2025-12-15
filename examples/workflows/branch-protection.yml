@@ -1,0 +1,343 @@
+name: Branch Protection & Conditional Enforcement
+
+# Complete example combining:
+# - Branch-conditional validation (strict on PRs, lenient on main)
+# - GitHub branch protection integration
+# - Manual approval workflow
+# - Emergency hotfix bypass
+
+on:
+  pull_request:
+    branches: [main, staging]
+  push:
+    branches: [main]
+
+permissions:
+  contents: write      # For auto-commit on main
+  pull-requests: write # For PR comments
+  issues: write        # For labels
+
+jobs:
+  # ========================================
+  # Job 1: Validate Pull Requests (STRICT)
+  # ========================================
+  validate-pr:
+    name: Validate PR Changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Check for emergency override (hotfix label)
+      - name: Check for hotfix override
+        id: hotfix
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const isHotfix = labels.some(l => l.name === 'hotfix');
+
+            if (isHotfix) {
+              core.warning('🚨 HOTFIX LABEL DETECTED - Bypassing schema drift enforcement');
+              core.warning('This should only be used for critical production fixes');
+            }
+
+            return isHotfix ? 'true' : 'false';
+
+      # Run LUMOS validation
+      - name: Validate LUMOS schemas
+        id: lumos
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+          # Fail on drift unless hotfix
+          fail-on-drift: ${{ steps.hotfix.outputs.result != 'true' }}
+          comment-on-pr: false  # We'll post custom comment below
+
+      # Post detailed validation comment
+      - name: Post validation results
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const driftDetected = '${{ steps.lumos.outputs.drift-detected }}' === 'true';
+            const isHotfix = '${{ steps.hotfix.outputs.result }}' === 'true';
+            const schemasValidated = '${{ steps.lumos.outputs.schemas-validated }}';
+            const schemasGenerated = '${{ steps.lumos.outputs.schemas-generated }}';
+            const diffSummary = `${{ steps.lumos.outputs.diff-summary }}`;
+
+            let emoji, title, body;
+
+            if (driftDetected && isHotfix) {
+              // Hotfix mode - drift bypassed
+              emoji = '🚨';
+              title = 'HOTFIX MODE: Schema Drift Bypassed';
+              body = `
+**⚠️ WARNING:** This PR has schema drift but is marked as a hotfix.
+
+**Drift must be fixed in a follow-up PR.**
+
+### Affected Files
+\`\`\`diff
+${diffSummary}
+\`\`\`
+
+### Required Follow-up Actions
+- [ ] Create follow-up PR to regenerate code
+- [ ] Link follow-up PR in this PR description
+- [ ] Document why hotfix was necessary in PR description
+
+**Reviewers:** Please verify this truly requires emergency treatment.
+              `;
+
+            } else if (driftDetected) {
+              // Normal mode - drift detected, blocking
+              emoji = '❌';
+              title = 'Schema Drift Detected - PR Blocked';
+              body = `
+Generated code is out of sync with schemas. Regenerate before merging.
+
+### How to Fix
+
+**Option 1: Regenerate locally (recommended)**
+\`\`\`bash
+lumos generate schemas/**/*.lumos
+git add .
+git commit -m "chore: Regenerate code from schemas"
+git push
+\`\`\`
+
+**Option 2: Manual approval (for intentional drift)**
+If this drift is intentional (e.g., incremental migration):
+1. Get approval from @org/schema-maintainers team
+2. Team member adds label: \`schema-drift-approved\`
+
+**Option 3: Emergency override (use sparingly!)**
+For critical production fixes only:
+1. Add label: \`hotfix\`
+2. Requires maintainer approval
+3. **Must create follow-up PR** to fix drift
+
+### Affected Files
+\`\`\`diff
+${diffSummary}
+\`\`\`
+
+---
+
+<details>
+<summary>💡 Why is schema drift a problem?</summary>
+
+When generated code doesn't match schemas:
+- **Runtime errors** - Type mismatches cause crashes
+- **Serialization bugs** - Borsh incompatibility breaks on-chain data
+- **Developer confusion** - Code doesn't reflect actual schemas
+
+**Always regenerate after schema changes.**
+</details>
+
+<sub>💡 Run \`lumos diff\` locally to preview changes</sub>
+              `;
+
+            } else {
+              // No drift - all good!
+              emoji = '✅';
+              title = 'Schema Validation Passed';
+              body = `
+All schemas are valid and generated code is up to date.
+
+**Validation Summary:**
+- ${schemasValidated} schema(s) validated
+- ${schemasGenerated} file(s) generated
+- No drift detected
+
+Safe to merge! 🚀
+              `;
+            }
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## ${emoji} ${title}\n${body}`
+            });
+
+      # Check for manual approval if drift detected (and not hotfix)
+      - name: Check manual approval
+        if: |
+          steps.lumos.outputs.drift-detected == 'true' &&
+          steps.hotfix.outputs.result != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Check for approval label
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const hasApprovalLabel = labels.some(l => l.name === 'schema-drift-approved');
+
+            // Check for maintainer approval
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            // CONFIGURE: Update with your maintainer GitHub usernames
+            const maintainers = ['alice', 'bob', 'charlie'];
+
+            const hasMaintainerApproval = reviews.some(r =>
+              r.state === 'APPROVED' &&
+              maintainers.includes(r.user.login)
+            );
+
+            // Allow merge if either condition is met
+            if (!hasApprovalLabel && !hasMaintainerApproval) {
+              core.setFailed(
+                '❌ Schema drift requires:\n' +
+                '  1. Regenerate code locally, OR\n' +
+                '  2. Maintainer adds "schema-drift-approved" label, OR\n' +
+                '  3. Approval from: ' + maintainers.join(', ')
+              );
+            } else {
+              if (hasApprovalLabel) {
+                core.info('✅ Manual approval granted via label "schema-drift-approved"');
+              }
+              if (hasMaintainerApproval) {
+                const approver = reviews.find(r =>
+                  r.state === 'APPROVED' && maintainers.includes(r.user.login)
+                );
+                core.info(`✅ Maintainer approval granted by: ${approver.user.login}`);
+              }
+            }
+
+  # ========================================
+  # Job 2: Generate on Main Branch (LENIENT)
+  # ========================================
+  generate-main:
+    name: Auto-Generate on Main
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate and generate
+        uses: getlumos/lumos-action@v1
+        with:
+          schema: 'schemas/**/*.lumos'
+          fail-on-drift: false  # Don't fail - just warn
+
+      - name: Commit generated code
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --staged --quiet; then
+            echo "✅ No changes to commit - code is up to date"
+          else
+            echo "📝 Committing auto-generated code"
+            git commit -m "chore: Auto-generate code from schemas [skip ci]"
+            git push
+
+            echo "::notice::Generated code auto-committed to main branch"
+          fi
+
+# ========================================
+# SETUP INSTRUCTIONS
+# ========================================
+#
+# 1. Configure Maintainers
+#    Update line 91 with actual GitHub usernames:
+#    const maintainers = ['alice', 'bob', 'charlie'];
+#
+# 2. Create Required Labels
+#    gh label create "schema-drift-approved" --color "0E8A16" \
+#      --description "Maintainer approval for intentional schema drift"
+#
+#    gh label create "hotfix" --color "D93F0B" \
+#      --description "Emergency fix - bypasses schema validation"
+#
+# 3. Configure Branch Protection
+#    Repository Settings → Branches → Add rule for 'main':
+#
+#    ✅ Require pull request before merging
+#       - Require approvals: 1+
+#       - Dismiss stale approvals when new commits pushed
+#
+#    ✅ Require status checks to pass before merging
+#       - Require branches to be up to date
+#       - Status checks required: "Validate PR Changes"
+#
+#    ✅ Require conversation resolution before merging
+#
+#    ✅ Allow specified actors to bypass (for bot auto-commits)
+#       - Add: github-actions[bot]
+#
+# 4. Optional: CODEOWNERS
+#    Create .github/CODEOWNERS:
+#
+#    # Schema files require approval
+#    schemas/**/*.lumos @org/schema-maintainers
+#
+#    Then enable in branch protection:
+#    ✅ Require review from Code Owners
+#
+# ========================================
+# USAGE EXAMPLES
+# ========================================
+#
+# Normal PR (no drift):
+#   - Validation passes
+#   - PR comment: ✅ Safe to merge
+#   - Can merge immediately
+#
+# PR with drift:
+#   - Validation fails
+#   - PR comment: ❌ Drift detected
+#   - Options to resolve:
+#     1. Regenerate code locally
+#     2. Get maintainer to add "schema-drift-approved" label
+#     3. Get maintainer to approve PR
+#
+# Emergency hotfix:
+#   - Add "hotfix" label
+#   - Validation bypassed
+#   - PR comment: 🚨 Must create follow-up PR
+#   - Can merge with drift
+#
+# Push to main:
+#   - Generates code if needed
+#   - Auto-commits to main
+#   - Uses [skip ci] to prevent loop
+#
+# ========================================
+# TROUBLESHOOTING
+# ========================================
+#
+# Status check not blocking merge:
+#   - Verify job name matches: "Validate PR Changes"
+#   - Check branch protection settings
+#   - Ensure workflow triggered on pull_request
+#
+# Manual approval not working:
+#   - Verify maintainer usernames (case-sensitive)
+#   - Check label name: "schema-drift-approved"
+#   - Verify review state is "APPROVED"
+#
+# Auto-commit not working:
+#   - Check permissions: contents: write
+#   - Verify bot in bypass list
+#   - Ensure [skip ci] in commit message
+#
+# See docs/branch-protection.md for detailed troubleshooting
